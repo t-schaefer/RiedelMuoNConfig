@@ -104,7 +104,11 @@ probe changed a field, read it back and restored it.
 | `flows/{id}` `{"network": {"pkt_filter_src_ip": ...}}` | OK, restored |
 | `sdi_output.vpid.source = "passthrough"` | **HTTP 400**: value not accepted, shape probably fine |
 | `self/protocols.mdns_enable`, `self/system.igmp.version` | **Card stopped answering and rebooted**; afterwards `mdns_enable` = "1" (was "0") and IGMP = 2 (was 3). The new values survived the reboot. |
-| `lldp.configuration.rate`, `self/diag/nmos.registry_address_2` | Not tested: timed out while the card was rebooting. Both were at their original values afterwards. |
+| `lldp.configuration.rate`, `self/diag/nmos.registry_address_2`, `sdi_output.line_offset.v_offset` | OK, restored (second run) |
+
+A later apply with the config tool wrote mDNS "0" and IGMP 3 back together.
+The card again stopped answering right after the `self/system` POST and
+rebooted about 45 s later. Both values were correct afterwards.
 
 Takeaways:
 - Partial nested POSTs work. The device merges them; there is no need to send whole objects.

@@ -57,6 +57,7 @@ API = "/emsfp/node/v1/"
 READ_CONCURRENCY = 8
 APPLY_CONCURRENCY = 4
 TIMEOUT = 6
+READBACK_WAIT_SEC = 120
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 logger = logging.getLogger("muon-config")
@@ -435,6 +436,15 @@ def build_bodies(read, rows):
 
 # ---------------------------------------------------------------- applying
 
+def uptime_seconds(system):
+    """'0 days, 00:01:07' -> 67"""
+    m = re.match(r"\s*(\d+)\s+days?,\s*(\d+):(\d+):(\d+)", str((system or {}).get("uptime", "")))
+    if not m:
+        return None
+    d, h, mi, s = (int(x) for x in m.groups())
+    return ((d * 24 + h) * 60 + mi) * 60 + s
+
+
 def backup(read):
     BACKUPS_DIR.mkdir(exist_ok=True)
     name = f"{read['ip']}_{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
@@ -444,6 +454,7 @@ def backup(read):
 
 def apply_device(ip, profile, override):
     """Fresh read -> plan -> backup -> POST per endpoint -> read back and verify."""
+    started = time.time()
     read = read_device(ip)
     with READS_LOCK:
         READS[ip] = read
@@ -464,16 +475,27 @@ def apply_device(ip, profile, override):
             logger.error("POST %s%s failed: %s", ip, path, e)
             result["posts"].append({"path": path, "body": body, "status": None, "response": str(e), "ok": False})
     time.sleep(1.0)  # let the device settle before reading back
+    # Some writes (mDNS, IGMP version) make the card stop answering and
+    # reboot. Keep retrying the read-back for a while instead of giving up.
+    deadline = time.time() + READBACK_WAIT_SEC
     fresh = {}
+
+    def readback(path):
+        while True:
+            try:
+                return http_get(addr, path)
+            except Exception as e:
+                if time.time() >= deadline:
+                    return e
+                result["unreachable"] = True
+                time.sleep(5)
+
     for r in rows:
         if r["status"] != "change":
             continue
         s = cat.BY_ID[r["setting"]]
         if r["path"] not in fresh:
-            try:
-                fresh[r["path"]] = http_get(addr, r["path"])
-            except Exception as e:
-                fresh[r["path"]] = e
+            fresh[r["path"]] = readback(r["path"])
         data = fresh[r["path"]]
         if isinstance(data, Exception):
             r["verify"] = "unreadable"
@@ -482,6 +504,13 @@ def apply_device(ip, profile, override):
         got = get_in(data, s["field"])
         r["readback"] = None if got is MISSING else got
         r["verify"] = "ok" if got is not MISSING and same(got, r["desired"]) else "mismatch"
+    try:
+        up_after = uptime_seconds(http_get(addr, "self/system"))
+        if up_after is not None and up_after < time.time() - started:
+            result["rebooted"] = True
+            logger.warning("%s rebooted during apply (uptime now %ss)", ip, up_after)
+    except Exception:
+        pass
     ok = sum(1 for r in rows if r.get("verify") == "ok")
     changed = sum(1 for r in rows if r["status"] == "change")
     logger.warning("apply %s: %d/%d changed fields verified, backup %s", ip, ok, changed, result["backup"])

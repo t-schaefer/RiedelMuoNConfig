@@ -207,13 +207,16 @@ BY_ID = {s["id"]: s for s in CATALOG}
 VERIFIED_ON_MUON = [
     "syslog.port", "syslog.mon.common.temp_event", "ptp.announce_timeout", "ptp.dscp", "sdi.audio_delay",
     "cs.igmp_setup_delay", "flow.rtp_pt", "flow.pkt_filter_src_ip",
+    # second run, same day
+    "lldp.rate", "nmos.registry_address_2", "sdi.v_offset",
 ]
 for _id in VERIFIED_ON_MUON:
     BY_ID[_id]["evidence"] = "verified"
 # Same endpoint and write shape as a verified sibling -> same confidence.
 for _s in CATALOG:
     if _s["evidence"] == "api" and (
-        _s["endpoint"] == "self/syslog" or _s["id"].startswith(("sdi.", "cs.", "flow.pkt_filter_", "ptp."))
+        _s["endpoint"] in ("self/syslog", "lldp", "self/diag/nmos")
+        or _s["id"].startswith(("sdi.", "cs.", "flow.pkt_filter_", "ptp."))
     ) and _s["type"] != "audiomap" and _s["id"] != "sdi.vpid_source":
         _s["evidence"] = "same-shape"
 
@@ -242,6 +245,9 @@ BODY_EXTRAS = {
 
 # Order in which endpoints are written on one device: media first,
 # management-network changes last so a moved IP can't cut off the rest.
+# self/protocols (mDNS) and self/system (IGMP) go after everything else on
+# the same management address: on the MuoN, writing them made the card stop
+# answering and reboot about 45 s later (test card, 2026-09-25).
 ENDPOINT_ORDER = ["flow", "sdi_output", "clean_switch", "port", "ptp", "refclk", "sdi", "self/syslog", "lldp",
-                  "self/protocols", "self/system", "self/phy", "self/diag/nmos", "self/static_route",
+                  "self/phy", "self/diag/nmos", "self/static_route", "self/protocols", "self/system",
                   "self/ipconfig", "self/interfaces"]

@@ -577,7 +577,9 @@ function renderPlan(results) {
     if (res) {
       const ok = rows.filter(x => x.verify === "ok").length, mis = rows.filter(x => x.verify && x.verify !== "ok").length;
       const postFail = (res.posts || []).filter(x => !x.ok).length;
-      verify = ` — <span class="chip ${mis || postFail ? "bad" : "ok"}">${ok}/${c.change} verified</span>` + (postFail ? `<span class="chip bad">${postFail} POST failed</span>` : "") + (res.backup ? ` <span class="muted small">backup ${esc(res.backup)}</span>` : "");
+      verify = ` — <span class="chip ${mis || postFail ? "bad" : "ok"}">${ok}/${c.change} verified</span>` + (postFail ? `<span class="chip bad">${postFail} POST failed</span>` : "") +
+        (res.rebooted ? `<span class="chip warn">device rebooted</span>` : res.unreachable ? `<span class="chip warn">was briefly unreachable</span>` : "") +
+        (res.backup ? ` <span class="muted small">backup ${esc(res.backup)}</span>` : "");
     }
     html += `<details class="group" ${c.change || c.invalid || res ? "open" : ""}><summary>${esc(devLabel(ip))} — ${c.change} change(s), ${c.unsupported} n/a, ${c.invalid} invalid${verify}</summary><div>`;
     const shown = rows.filter(x => showSame || x.status === "change" || x.status === "invalid");
