@@ -1,6 +1,6 @@
 # RiedelMuoNConfig
 
-Batch configuration tool for Redel **MuoN** cards and **Fusion**
+Batch configuration tool for Riedel **MuoN** cards and **Fusion**
 gateways (the emsfp platform, `http://<ip>/emsfp/node/v1`). Define a settings
 profile once and apply it to any number of devices. Where the device has
 them, you can override single settings per device or per I/O: SDI output,
