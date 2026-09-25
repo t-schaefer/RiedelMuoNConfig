@@ -9,17 +9,30 @@ channel, flow leg, PTP port or SFP port.
 It needs only Python 3 and the standard library, the same as the
 [Fusion dashboard](https://github.com/t-schaefer/RiedelFusionDashboard).
 
-## Start
+## Install as a service (reachable from the network)
 
-```
-Start-MuoNConfig.bat
-```
+Set up the same way as the Fusion dashboard:
 
-or `python config-tool/server.py`, then open http://localhost:8091/.
+1. Double-click **`Install-MuoNConfig-Service.bat`** and approve the UAC
+   prompt. This registers the scheduled task `MuoNConfigToolService`. It runs
+   as SYSTEM, starts at boot, restarts after a crash and needs no login. It
+   also opens the firewall for TCP 8091.
+2. Open `http://<this PC>:8091/` from any machine. The dashboard stays on 8090.
 
-By default the tool is **only reachable from this machine**. It writes to
-broadcast devices and has no login. To open it to the network deliberately,
-set `MUON_CONFIG_HOST=0.0.0.0` (and optionally `MUON_CONFIG_PORT`).
+To update later, double-click **`Update-MuoNConfig.bat`**. It runs
+`git pull` and restarts the service. Your device list, `site-default`
+profile and backups are not in git, so they are kept. To remove the service,
+run `config-tool\uninstall-task-windows.ps1` as administrator.
+
+The tool has **no login**. Anyone who can reach this PC on port 8091 can
+write settings to the devices.
+
+## Start by hand (local only)
+
+`Start-MuoNConfig.bat` (or `python config-tool/server.py`) runs the tool in
+a console window, reachable only from this machine at http://localhost:8091/.
+Don't use it while the service is installed, because both use port 8091.
+`--host 0.0.0.0` and `--port` override the defaults.
 
 ## Workflow
 

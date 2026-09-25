@@ -50,7 +50,8 @@ DASHBOARD_DEVICES_FILE = Path(r"C:\Apps\Fusion Dashboard\RiedelFusionDashboard\f
 
 # Local-only by default: this tool writes to broadcast devices and has no
 # login, so it should not be reachable from the network unless you decide
-# so (set MUON_CONFIG_HOST=0.0.0.0 to open it up).
+# so (--host 0.0.0.0, which install-task-windows.ps1 does, or
+# MUON_CONFIG_HOST=0.0.0.0).
 HOST = os.environ.get("MUON_CONFIG_HOST", "127.0.0.1")
 PORT = int(os.environ.get("MUON_CONFIG_PORT", "8091"))
 API = "/emsfp/node/v1/"
@@ -719,10 +720,15 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser(description="MuoN / Fusion config tool")
+    ap.add_argument("--host", default=HOST, help="bind address; 0.0.0.0 = reachable from the network (default %(default)s)")
+    ap.add_argument("--port", type=int, default=PORT, help="default %(default)s")
+    args = ap.parse_args()
     PROFILES_DIR.mkdir(exist_ok=True)
     BACKUPS_DIR.mkdir(exist_ok=True)
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
-    logger.info("MuoN config tool listening on http://%s:%d/", HOST, PORT)
+    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    logger.info("MuoN config tool listening on http://%s:%d/", args.host, args.port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
