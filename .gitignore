@@ -3,6 +3,7 @@ __pycache__/
 config-tool/config-tool.log
 config-tool/config-tool.log.*
 config-tool/devices.json
+config-tool/auth.json
 config-tool/backups/
 config-tool/profiles/*.json
 !config-tool/profiles/*.example.json

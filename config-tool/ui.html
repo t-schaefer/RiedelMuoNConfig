@@ -79,6 +79,7 @@
   <h1>MuoN / Fusion Config Tool</h1>
   <span class="muted small">Batch configuration for emsfp devices, with optional per-device and per-I/O overrides</span>
   <span class="status" id="status"></span>
+  <a href="/logout" id="logout" class="hidden"><button>Log out</button></a>
 </header>
 
 <div class="layout">
@@ -225,6 +226,7 @@ function status(msg) { $("#status").textContent = msg; }
 
 async function api(path, body) {
   const res = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (res.status === 401) { location.href = "/login"; throw new Error("login required"); }
   const data = await res.json().catch(() => ({ ok: false, error: "HTTP " + res.status }));
   if (!res.ok || data.ok === false) throw new Error(data.error || ("HTTP " + res.status));
   return data;
@@ -806,6 +808,7 @@ function renderAll() { renderDevices(); renderDeviceSelects(); renderTab($("#tab
 (async function init() {
   const c = await api("/api/catalog");
   CATALOG = c.catalog; SCOPES = c.scopes; BY_ID = Object.fromEntries(CATALOG.map(s => [s.id, s]));
+  $("#logout").classList.toggle("hidden", !c.auth);
   datalists();
   $("#ioScope").innerHTML = Object.entries(SCOPES).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("");
   profile = load("muon.profile", { values: {}, io: {} });

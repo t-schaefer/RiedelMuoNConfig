@@ -24,8 +24,20 @@ To update later, double-click **`Update-MuoNConfig.bat`**. It runs
 profile and backups are not in git, so they are kept. To remove the service,
 run `config-tool\uninstall-task-windows.ps1` as administrator.
 
-The tool has **no login**. Anyone who can reach this PC on port 8091 can
-write settings to the devices.
+### Login
+
+The tool is password protected. The installer asks for a password if none is
+set yet. To change it later, double-click **`Set-MuoNConfig-Password.bat`**.
+The change takes effect at once, with no restart. The password is stored
+only as a salted PBKDF2 hash in `config-tool/auth.json`, which is not in git.
+
+- There is one shared password. A session lasts 12 h and is extended on
+  every use. Restarting the service logs everyone out. The header has a
+  *Log out* button.
+- After 5 wrong attempts from one address, each further attempt waits longer (up to 5 min).
+- Logins and failed attempts are written to `config-tool/config-tool.log`.
+- As long as no password is set, the tool only answers requests from this
+  PC itself. Remote requests get a "no password set" page.
 
 ## Start by hand (local only)
 

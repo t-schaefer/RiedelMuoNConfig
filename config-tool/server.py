@@ -22,11 +22,14 @@ Safety design:
   the Fusion dashboard.
 """
 
+import hashlib
+import hmac
 import json
 import logging
 import logging.handlers
 import os
 import re
+import secrets
 import threading
 import time
 import urllib.error
@@ -35,6 +38,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs
 
 import catalog as cat
 
@@ -69,6 +73,13 @@ logger.addHandler(_fh)
 _ch = logging.StreamHandler()
 _ch.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
 logger.addHandler(_ch)
+
+AUTH_FILE = BASE_DIR / "auth.json"
+SESSION_COOKIE = "muon_session"
+SESSION_TTL_SEC = 12 * 3600
+SESSIONS = {}  # token -> expiry (epoch); in memory, a restart logs everyone out
+FAILED_LOGINS = {}  # client ip -> (count, last attempt)
+AUTH_LOCK = threading.Lock()
 
 READS = {}  # ip -> last device read (see read_device)
 READS_LOCK = threading.RLock()
@@ -569,6 +580,76 @@ def capture(read, batch_only):
     return cur
 
 
+# ---------------------------------------------------------------- login
+
+def hash_password(password, salt):
+    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 200_000).hex()
+
+
+def set_password(password):
+    salt = secrets.token_bytes(16)
+    AUTH_FILE.write_text(json.dumps({"salt": salt.hex(), "hash": hash_password(password, salt)}), encoding="utf-8")
+
+
+def password_configured():
+    return AUTH_FILE.exists()
+
+
+def check_password(password):
+    try:
+        auth = json.loads(AUTH_FILE.read_text(encoding="utf-8"))
+        return hmac.compare_digest(hash_password(password, bytes.fromhex(auth["salt"])), auth["hash"])
+    except Exception:
+        return False
+
+
+def new_session():
+    token = secrets.token_urlsafe(32)
+    with AUTH_LOCK:
+        SESSIONS[token] = time.time() + SESSION_TTL_SEC
+    return token
+
+
+def session_valid(token):
+    with AUTH_LOCK:
+        exp = SESSIONS.get(token)
+        if not exp or exp < time.time():
+            SESSIONS.pop(token, None)
+            return False
+        SESSIONS[token] = time.time() + SESSION_TTL_SEC  # sliding expiry
+        return True
+
+
+def login_delay(client):
+    """Seconds this client must still wait after repeated wrong passwords."""
+    count, last = FAILED_LOGINS.get(client, (0, 0))
+    if count < 5:
+        return 0
+    return max(0, int(last + min(300, 15 * (count - 4)) - time.time()))
+
+
+LOGIN_PAGE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>MuoN Config Tool - Login</title>
+<style>
+ :root{--bg:#f4f5f7;--panel:#fff;--text:#1d2330;--muted:#6b7385;--line:#dde1e8;--accent:#2563eb;--bad:#b91c1c}
+ @media (prefers-color-scheme: dark){:root{--bg:#13161c;--panel:#1b1f27;--text:#e4e7ee;--muted:#8d95a8;--line:#2c323e;--accent:#6d9bff;--bad:#f87171}}
+ body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--text);font:14px system-ui,"Segoe UI",sans-serif}
+ form{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:24px;width:min(340px,calc(100vw - 32px))}
+ h1{font-size:17px;margin:0 0 4px} p{color:var(--muted);margin:0 0 16px;font-size:13px}
+ input{width:100%;box-sizing:border-box;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:inherit;font:inherit}
+ button{margin-top:12px;width:100%;padding:8px;border:0;border-radius:6px;background:var(--accent);color:#fff;font:inherit;cursor:pointer}
+ .err{color:var(--bad);margin:10px 0 0;font-size:13px}
+</style></head><body><form method="post" action="/login">
+<h1>MuoN / Fusion Config Tool</h1><p>Writes configuration to broadcast devices. Password required.</p>
+<input type="password" name="password" placeholder="Password" autofocus autocomplete="current-password">
+<button type="submit">Log in</button>__ERROR__</form></body></html>"""
+
+NO_PASSWORD_PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>MuoN Config Tool</title></head>
+<body style="font:14px system-ui;padding:32px"><h1 style="font-size:17px">No password set</h1>
+<p>Remote access stays locked until a password is set. On the server, double-click
+<b>Set-MuoNConfig-Password.bat</b> (or run <code>python config-tool\\server.py --set-password</code>).</p></body></html>"""
+
+
 # ---------------------------------------------------------------- HTTP API
 
 def read_many(ips):
@@ -604,7 +685,90 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    # ---- login gate
+    def _html(self, html, status=200, headers=None):
+        body = html.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _redirect(self, where, headers=None):
+        self.send_response(303)
+        self.send_header("Location", where)
+        self.send_header("Content-Length", "0")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+
+    def _is_local(self):
+        return self.client_address[0] in ("127.0.0.1", "::1")
+
+    def _token(self):
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == SESSION_COOKIE:
+                return v
+        return ""
+
+    def _authorized(self):
+        """Password set -> everyone needs a session. No password yet ->
+        only this machine itself may use the tool (e.g. to get started)."""
+        if not password_configured():
+            return self._is_local()
+        return session_valid(self._token())
+
+    def _deny(self):
+        path = self.path.split("?")[0]
+        if not password_configured():
+            if path.startswith("/api/"):
+                self._json({"ok": False, "error": "no password set - remote access locked"}, 403)
+            else:
+                self._html(NO_PASSWORD_PAGE, 403)
+        elif path.startswith("/api/"):
+            self._json({"ok": False, "error": "login required", "login": True}, 401)
+        else:
+            self._redirect("/login")
+
+    def _login_post(self):
+        client = self.client_address[0]
+        length = int(self.headers.get("Content-Length", 0))
+        form = parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
+        wait = login_delay(client)
+        if wait:
+            self._html(LOGIN_PAGE.replace("__ERROR__", f'<p class="err">Too many attempts - wait {wait} s.</p>'), 429)
+            return
+        if password_configured() and check_password((form.get("password") or [""])[0]):
+            FAILED_LOGINS.pop(client, None)
+            logger.warning("login from %s", client)
+            cookie = f"{SESSION_COOKIE}={new_session()}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_TTL_SEC}"
+            self._redirect("/", {"Set-Cookie": cookie})
+            return
+        count, _ = FAILED_LOGINS.get(client, (0, 0))
+        FAILED_LOGINS[client] = (count + 1, time.time())
+        logger.warning("failed login from %s (%d)", client, count + 1)
+        self._html(LOGIN_PAGE.replace("__ERROR__", '<p class="err">Wrong password.</p>'), 401)
+
     def do_GET(self):
+        path = self.path.split("?")[0]
+        if path == "/login":
+            if not password_configured():
+                self._redirect("/")
+            else:
+                self._html(LOGIN_PAGE.replace("__ERROR__", ""))
+            return
+        if path == "/logout":
+            with AUTH_LOCK:
+                SESSIONS.pop(self._token(), None)
+            self._redirect("/login", {"Set-Cookie": f"{SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"})
+            return
+        if not self._authorized():
+            self._deny()
+            return
         if self.path in ("/", "/index.html"):
             body = UI_FILE.read_bytes()
             self.send_response(200)
@@ -613,7 +777,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         elif self.path == "/api/catalog":
-            self._json({"catalog": cat.CATALOG, "scopes": cat.SCOPES})
+            self._json({"catalog": cat.CATALOG, "scopes": cat.SCOPES, "auth": password_configured()})
         elif self.path == "/api/devices":
             with READS_LOCK:
                 reads = {ip: public_read(r) for ip, r in READS.items()}
@@ -627,6 +791,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
+        if self.path.split("?")[0] == "/login":
+            self._login_post()
+            return
+        if not self._authorized():
+            self._deny()
+            return
         length = int(self.headers.get("Content-Length", 0))
         try:
             data = json.loads(self.rfile.read(length) or b"{}")
@@ -724,7 +894,18 @@ def main():
     ap = argparse.ArgumentParser(description="MuoN / Fusion config tool")
     ap.add_argument("--host", default=HOST, help="bind address; 0.0.0.0 = reachable from the network (default %(default)s)")
     ap.add_argument("--port", type=int, default=PORT, help="default %(default)s")
+    ap.add_argument("--set-password", action="store_true", help="set the login password (prompted) and exit")
     args = ap.parse_args()
+    if args.set_password:
+        import getpass
+        pw = getpass.getpass("New password: ")
+        if len(pw) < 8:
+            raise SystemExit("Password must be at least 8 characters.")
+        if pw != getpass.getpass("Repeat password: "):
+            raise SystemExit("Passwords don't match.")
+        set_password(pw)
+        print(f"Password saved to {AUTH_FILE}. A running service picks it up for new logins right away.")
+        return
     PROFILES_DIR.mkdir(exist_ok=True)
     BACKUPS_DIR.mkdir(exist_ok=True)
     server = ThreadingHTTPServer((args.host, args.port), Handler)

@@ -33,6 +33,19 @@ if (-not $python) { $python = Get-Command python.exe -ErrorAction SilentlyContin
 if (-not $python) { throw "Python was not found on PATH." }
 Write-Host "Using Python at: $($python.Source)"
 
+# Without a password the tool refuses every request that doesn't come from
+# this PC, so set one now if there is none yet.
+if (-not (Test-Path (Join-Path $ScriptDir "auth.json"))) {
+    Write-Host "No login password set yet - choose one now (min. 8 characters)." -ForegroundColor Yellow
+    $pyConsole = (Get-Command python.exe -ErrorAction SilentlyContinue).Source
+    if (-not $pyConsole) { $pyConsole = $python.Source }
+    Push-Location $ScriptDir
+    try { & $pyConsole $ServerPy --set-password } finally { Pop-Location }
+    if (-not (Test-Path (Join-Path $ScriptDir "auth.json"))) {
+        Write-Host "No password set - the tool will only answer requests from this PC until you run Set-MuoNConfig-Password.bat." -ForegroundColor Yellow
+    }
+}
+
 $fwRuleName = "MuoN Config Tool (TCP $Port)"
 if (-not (Get-NetFirewallRule -DisplayName $fwRuleName -ErrorAction SilentlyContinue)) {
     New-NetFirewallRule -DisplayName $fwRuleName -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow | Out-Null
