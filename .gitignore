@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+config-tool/config-tool.log
+config-tool/config-tool.log.*
+config-tool/devices.json
+config-tool/backups/
+config-tool/profiles/*.json
+!config-tool/profiles/*.example.json
+# raw device dumps from tools/crawl.py
+captures/
+*-crawl.json
+.claude/
