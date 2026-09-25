@@ -89,7 +89,25 @@ ST 2022-7 class d, PTP domain 127, DSCP 46. Clean switch disabled / bbm /
 
 ## Write verification status
 
-All write shapes come either from the vendor web client (`evidence: js` in
-`config-tool/catalog.py`) or from GET field names (`evidence: api`). None
-has been fired at a MuoN yet. Run `tools/probe-writes.py <ip> --test-card`
-on the test card. It changes each probe field, reads it back and restores it.
+On 2026-09-25, `tools/probe-writes.py` was run against the test card. Each
+probe changed a field, read it back and restored it.
+
+| Probe | Result |
+|---|---|
+| syslog `monitoring.common.temp_event` (partial nested POST) | OK, restored |
+| syslog `config.port` (partial `config` POST) | OK, restored |
+| `refclk.announceReceiptTimeout` | OK, restored |
+| `refclk/{uuid}.dscp` | OK, restored |
+| `sdi_output.line_offset.audio_delay` | OK, restored |
+| `clean_switch.igmp_setup_delay` | OK, restored |
+| `flows/{id}` `{"network": {"rtp_pt": ...}}` (flat body on a list-shaped flow) | OK, restored |
+| `flows/{id}` `{"network": {"pkt_filter_src_ip": ...}}` | OK, restored |
+| `sdi_output.vpid.source = "passthrough"` | **HTTP 400**: value not accepted, shape probably fine |
+| `self/protocols.mdns_enable`, `self/system.igmp.version` | **Card stopped answering and rebooted**; afterwards `mdns_enable` = "1" (was "0") and IGMP = 2 (was 3). The new values survived the reboot. |
+| `lldp.configuration.rate`, `self/diag/nmos.registry_address_2` | Not tested: timed out while the card was rebooting. Both were at their original values afterwards. |
+
+Takeaways:
+- Partial nested POSTs work. The device merges them; there is no need to send whole objects.
+- Treat mDNS and IGMP version changes as disruptive. The tool marks them *danger*.
+- The probe script no longer touches those two fields, and it stops at the
+  first timeout.

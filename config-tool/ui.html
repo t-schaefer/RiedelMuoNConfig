@@ -118,6 +118,7 @@
         I/O of that type. Settings a device doesn't have are skipped for that device ("unsupported").
         <span class="chip danger">danger</span> can take a device or signal off air.
         <span class="chip api">unverified</span> write shape derived from the API; try it on a test card first.
+        <span class="chip ok">verified</span> written and read back on the MuoN test card.
       </div>
       <div id="batchGroups"></div>
     </div>
@@ -318,7 +319,8 @@ function summarize(s) {
 }
 
 function badges(s) {
-  return (s.danger ? `<span class="chip danger">danger</span>` : "") + (s.evidence === "api" ? `<span class="chip api">unverified</span>` : "");
+  return (s.danger ? `<span class="chip danger">danger</span>` : "") +
+    (s.evidence === "api" ? `<span class="chip api">unverified</span>` : s.evidence === "verified" ? `<span class="chip ok">verified</span>` : "");
 }
 
 function editor(s, value, placeholder, onChange) {

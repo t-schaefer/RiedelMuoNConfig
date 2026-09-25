@@ -27,7 +27,10 @@ Entry fields:
             False = per-device / per-I/O only (addresses, hostnames, ...)
   danger    shown with a warning; changes that can take a device or a
             signal off the air
-  evidence  "js"  = write shape taken from the vendor's own web client JS
+  evidence  "verified"   = written and read back on the MuoN test card
+            "same-shape" = not probed itself, but same endpoint and write
+                           shape as a verified setting
+            "js"  = write shape taken from the vendor's own web client JS
                     (fusionFunctions.js / flowEditorFunctions.js)
             "api" = derived from field names in the GET response only;
                     verify on a test card before fleet-wide use
@@ -198,6 +201,31 @@ _add("port.sfp_type", "SFP port", "SFP type", PORT, ["sfp_type"], "enum", option
      danger=True)
 
 BY_ID = {s["id"]: s for s in CATALOG}
+
+# Results of tools/probe-writes.py on the MuoN test card 10.101.12.162
+# (2026-09-25): write shape accepted and read back correctly.
+VERIFIED_ON_MUON = [
+    "syslog.port", "syslog.mon.common.temp_event", "ptp.announce_timeout", "ptp.dscp", "sdi.audio_delay",
+    "cs.igmp_setup_delay", "flow.rtp_pt", "flow.pkt_filter_src_ip",
+]
+for _id in VERIFIED_ON_MUON:
+    BY_ID[_id]["evidence"] = "verified"
+# Same endpoint and write shape as a verified sibling -> same confidence.
+for _s in CATALOG:
+    if _s["evidence"] == "api" and (
+        _s["endpoint"] == "self/syslog" or _s["id"].startswith(("sdi.", "cs.", "flow.pkt_filter_", "ptp."))
+    ) and _s["type"] != "audiomap" and _s["id"] != "sdi.vpid_source":
+        _s["evidence"] = "same-shape"
+
+# During the same probe run, writing mdns_enable and/or the IGMP version was
+# followed by the card dropping off the network and rebooting, with the new
+# values kept. Treat both as disruptive.
+for _id in ("proto.mdns", "sys.igmp_version"):
+    BY_ID[_id]["danger"] = True
+    BY_ID[_id]["help"] = "Changing this was followed by a card reboot on the MuoN test card."
+
+BY_ID["sdi.vpid_source"]["options"] = ["regenerated", "override"]
+BY_ID["sdi.vpid_source"]["help"] = "'passthrough' is rejected with HTTP 400 on the MuoN."
 
 # Parents that are always POSTed complete (all catalog-known leaves, current
 # values merged with the change), because the vendor client sends them as a
