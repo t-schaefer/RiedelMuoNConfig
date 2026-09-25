@@ -26,10 +26,18 @@ set `MUON_CONFIG_HOST=0.0.0.0` (and optionally `MUON_CONFIG_PORT`).
 1. **Devices** (left): add IPs, or *Import dashboard list* to take over the
    Fusion dashboard's `devices.json`. Select devices and click *Read
    selected*. This is read-only and pulls the complete config.
-2. **Batch profile**: tick settings and give them values. Next to each setting
-   you see the current values across the selected devices, and how many
-   devices don't have it. *Capture from device…* fills the profile from a
-   well-configured device. *Save as…* stores it under `config-tool/profiles/`.
+2. **Batch profile**: the editable **site-default** profile is loaded on
+   start. Tick settings and give them values. Next to each setting you see
+   the current values across the selected devices, and how many devices don't
+   have it. Every category has **All on** and **All off** buttons (start
+   from the devices' current values), and **Apply only this →** to preview and
+   apply just that category. The toolbar has search, *only active*, and
+   *Expand all* / *Collapse all* (the collapsed view is a one-line overview
+   per category). *Save* overwrites the selected profile; *unsaved* marks
+   pending edits. *Capture from device…* fills the profile from a
+   well-configured device. Profiles live in `config-tool/profiles/`.
+   `site-default.json` is local and git-ignored. It is seeded once from
+   `site-default.example.json`, so `git pull` never overwrites it.
 3. **Per I/O**: a grid per I/O type (SDI outputs, clean switch per channel,
    flows, PTP ports, SFP ports). A value there overrides the batch value for
    that one I/O on all selected devices. Empty means inherit.

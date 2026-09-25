@@ -371,10 +371,14 @@ def current_values(read):
 
 # ---------------------------------------------------------------- planning
 
-def plan_device(read, profile, override):
+def plan_device(read, profile, override, groups=None):
+    """groups: optional list of catalog groups to limit the plan to (the
+    UI's "apply only this category")."""
     flows_by_name = {i["key"]: i["id"] for i in read["instances"].get(cat.FLOW, [])}
     rows = []
     for s in cat.CATALOG:
+        if groups and s["group"] not in groups:
+            continue
         for inst in instances_for(read, s):
             want = desired_value(s, inst["key"], profile, override)
             if want is MISSING:
@@ -452,13 +456,13 @@ def backup(read):
     return name
 
 
-def apply_device(ip, profile, override):
+def apply_device(ip, profile, override, groups=None):
     """Fresh read -> plan -> backup -> POST per endpoint -> read back and verify."""
     started = time.time()
     read = read_device(ip)
     with READS_LOCK:
         READS[ip] = read
-    rows = plan_device(read, profile, override)
+    rows = plan_device(read, profile, override, groups)
     bodies = build_bodies(read, rows)
     result = {"ip": ip, "network": read["network"], "posts": [], "rows": rows, "backup": None}
     if not bodies:
@@ -528,6 +532,12 @@ def safe_name(name):
 
 def list_profiles():
     PROFILES_DIR.mkdir(exist_ok=True)
+    # Seed the editable (git-ignored) site-default.json from the tracked
+    # example once, so `git pull` never overwrites a site's own defaults.
+    seed = PROFILES_DIR / "site-default.json"
+    example = PROFILES_DIR / "site-default.example.json"
+    if not seed.exists() and example.exists():
+        seed.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
     return sorted(p.stem for p in PROFILES_DIR.glob("*.json"))
 
 
@@ -657,7 +667,7 @@ class Handler(BaseHTTPRequestHandler):
                 if r is None:
                     out[ip] = {"error": "not read yet - read the device first"}
                     continue
-                rows = plan_device(r, profile, overrides.get(ip))
+                rows = plan_device(r, profile, overrides.get(ip), data.get("groups"))
                 out[ip] = {"rows": rows, "posts": [{"path": pth, "body": b} for pth, b in build_bodies(r, rows)]}
             self._json({"ok": True, "plan": out})
         elif p == "/api/apply":
@@ -672,7 +682,7 @@ class Handler(BaseHTTPRequestHandler):
 
                 def one(ip):
                     try:
-                        return ip, apply_device(ip, profile, overrides.get(ip))
+                        return ip, apply_device(ip, profile, overrides.get(ip), data.get("groups"))
                     except Exception as e:
                         logger.error("apply %s failed: %s", ip, e)
                         return ip, {"ip": ip, "error": str(e)}

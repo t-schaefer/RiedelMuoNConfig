@@ -52,6 +52,16 @@
   .tabs button.active { background: var(--panel); border-color: var(--accent); color: var(--accent); font-weight: 600; }
   details.group { border: 1px solid var(--line); border-radius: 6px; margin-bottom: 8px; }
   details.group > summary { padding: 6px 10px; cursor: pointer; font-weight: 600; }
+  #batchGroups { column-width: 540px; column-gap: 8px; }
+  #batchGroups details.group { break-inside: avoid; display: inline-block; width: 100%; margin: 0 0 8px; }
+  #batchGroups summary { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  #batchGroups summary .gname { margin-right: auto; }
+  #batchGroups summary button { font-weight: normal; padding: 1px 8px; font-size: 12px; }
+  #batchGroups td { padding: 2px 6px; }
+  #batchGroups tr.off td:nth-child(2) { color: var(--muted); }
+  .count { font-weight: normal; }
+  .toolbar { position: sticky; top: -10px; background: var(--panel); padding: 6px 0; z-index: 3; }
+  @media (max-width: 700px) { #batchGroups { column-width: auto; column-count: 1; } }
   details.group > div { padding: 0 10px 8px; }
   .grid-wrap { overflow: auto; max-height: 60vh; border: 1px solid var(--line); border-radius: 6px; }
   .grid-wrap th:first-child, .grid-wrap td:first-child { position: sticky; left: 0; background: var(--panel); z-index: 2; white-space: nowrap; }
@@ -104,8 +114,9 @@
         <button data-tab="apply">4 · Preview &amp; apply</button>
       </div>
       <span style="margin-left:auto"></span>
-      <select id="profileSel"><option value="">— profile —</option></select>
-      <button id="btnLoadProfile">Load</button>
+      <select id="profileSel" title="Selecting a profile loads it"><option value="">— profile —</option></select>
+      <span id="dirty" class="chip warn hidden">unsaved</span>
+      <button id="btnSave" class="primary" title="Save changes to the selected profile">Save</button>
       <button id="btnSaveProfile">Save as…</button>
       <button id="btnDelProfile">Delete</button>
       <button id="btnCapture" title="Fill the batch profile from a device's current values">Capture from device…</button>
@@ -119,6 +130,12 @@
         <span class="chip danger">danger</span> can take a device or signal off air.
         <span class="chip api">unverified</span> write shape derived from the API; try it on a test card first.
         <span class="chip ok">verified</span> written and read back on the MuoN test card.
+      </div>
+      <div class="row toolbar">
+        <input id="batchSearch" placeholder="Search settings…" style="flex:1;min-width:180px">
+        <label class="small"><input type="checkbox" id="onlyActive"> only active</label>
+        <button id="btnExpand">Expand all</button>
+        <button id="btnCollapse">Collapse all</button>
       </div>
       <div id="batchGroups"></div>
     </div>
@@ -151,6 +168,7 @@
     </div>
 
     <div class="body hidden" id="tab-apply">
+      <div class="note small hidden" id="groupFilter"></div>
       <div class="row">
         <button id="btnPlan" class="primary">Build preview for selected devices</button>
         <label class="small"><input type="checkbox" id="showUnchanged"> show unchanged / n/a</label>
@@ -192,6 +210,8 @@ let selected = new Set();
 let profile = { values: {}, io: {} };   // batch profile
 let overrides = {};                      // ip -> {values, io}
 let lastPlan = null;
+let planGroups = null;                   // set by "Apply only this" on a category
+let currentProfile = "", dirty = false;
 
 function load(key, dflt) { try { return JSON.parse(localStorage.getItem(key)) ?? dflt; } catch { return dflt; } }
 function persist() {
@@ -359,46 +379,120 @@ function datalists() {
 // ------------------------------------------------------------------ tab 1: batch
 function renderBatch() {
   const wrap = $("#batchGroups");
-  const openGroups = new Set($$("details.group[open]", wrap).map(d => d.dataset.g));
+  const openGroups = new Set(load("muon.open", null) ?? [...new Set(CATALOG.map(s => s.group))]);
   wrap.innerHTML = "";
   const groups = new Map();
   for (const s of CATALOG) if (s.batch) { if (!groups.has(s.group)) groups.set(s.group, []); groups.get(s.group).push(s); }
   for (const [g, list] of groups) {
-    const n = list.filter(s => s.id in profile.values).length;
     const det = document.createElement("details");
     det.className = "group"; det.dataset.g = g;
-    if (openGroups.has(g) || (!wrap.children.length && !openGroups.size)) det.open = true;
-    const scopeName = list[0].scope !== "device" ? ` <span class="chip">per ${esc(SCOPES[list[0].scope] || list[0].scope)}</span>` : "";
-    det.innerHTML = `<summary>${esc(g)}${scopeName} <span class="muted small">${n ? n + " set" : ""}</span></summary><div><table><thead><tr><th style="width:24px"></th><th>Setting</th><th style="width:220px">Value</th><th>Current on selected devices</th></tr></thead><tbody></tbody></table></div>`;
+    det.open = openGroups.has(g);
+    det.addEventListener("toggle", saveOpenState);
+    const scopeName = list[0].scope !== "device" ? `<span class="chip">per ${esc(SCOPES[list[0].scope] || list[0].scope)}</span>` : "";
+    det.innerHTML = `<summary><span class="gname">${esc(g)} ${scopeName} <span class="count"></span></span>
+        <button class="b-on" title="Switch on every setting in this category (starting from the devices' current values)">All on</button>
+        <button class="b-off" title="Switch off every setting in this category">All off</button>
+        <button class="b-apply" title="Preview &amp; apply only this category to the selected devices">Apply only this →</button></summary>
+      <div><table><thead><tr><th style="width:24px"></th><th>Setting</th><th style="width:200px">Value</th><th>Current on selected devices</th></tr></thead><tbody></tbody></table></div>`;
     const tb = $("tbody", det);
     for (const s of list) {
       const tr = document.createElement("tr");
       const inc = s.id in profile.values;
       tr.innerHTML = `<td><input type="checkbox" ${inc ? "checked" : ""}></td><td>${esc(s.label)} ${badges(s)}</td><td></td><td class="small">${summarize(s)}</td>`;
       const cb = $("input", tr);
+      tr.classList.toggle("off", !inc);
       const ed = editor(s, profile.values[s.id], undefined, v => {
         if (v === undefined) delete profile.values[s.id]; else profile.values[s.id] = v;
-        cb.checked = v !== undefined; persist(); renderBatchCounts();
+        cb.checked = v !== undefined; tr.classList.toggle("off", !cb.checked);
+        profileChanged(); renderBatchCounts();
       });
       tr.children[2].appendChild(ed);
       cb.onchange = () => {
         if (!cb.checked) { delete profile.values[s.id]; ed.value = ""; ed.classList.remove("set"); }
-        else { const first = selectedReads().map(r => s.scope === "device" ? currentOf(r, s) : currentOf(r, s, (r.instances[s.scope] || [])[0])).find(v => v !== undefined);
-               if (first === undefined) { cb.checked = false; return alert("Enter a value first (no selected device has this setting)."); }
-               profile.values[s.id] = first; renderBatch(); }
-        persist();
+        else {
+          const first = defaultFor(s);
+          if (first === undefined) { cb.checked = false; return alert("Enter a value first (no read device has this setting)."); }
+          profile.values[s.id] = first; ed.value = fmt(first); ed.classList.add("set");
+          if (ed.tagName === "SELECT") ed.value = (first === true || first === "1" || first === "true") ? "true" : "false";
+        }
+        tr.classList.toggle("off", !cb.checked);
+        profileChanged(); renderBatchCounts();
       };
+      tr.dataset.search = (s.label + " " + s.id + " " + g).toLowerCase();
       tb.appendChild(tr);
     }
+    wireGroupButtons(det, g, list);
     wrap.appendChild(det);
   }
+  applyBatchFilter();
+  renderBatchCounts();
 }
-function renderBatchCounts() {
-  $$("#batchGroups details.group").forEach(det => {
-    const n = CATALOG.filter(s => s.batch && s.group === det.dataset.g && s.id in profile.values).length;
-    $("summary .muted", det).textContent = n ? n + " set" : "";
+
+// value to start from when a setting is switched on: the first read device's current value
+function defaultFor(s) {
+  const pool = [...selectedReads(), ...Object.values(reads)];
+  for (const r of pool) {
+    const v = s.scope === "device" ? currentOf(r, s) : (r.instances[s.scope] || []).map(k => currentOf(r, s, k)).find(x => x !== undefined);
+    if (v !== undefined) return v;
+  }
+  return undefined;
+}
+
+function wireGroupButtons(det, g, list) {
+  const stop = fn => e => { e.preventDefault(); e.stopPropagation(); fn(); };
+  $(".b-on", det).onclick = stop(() => {
+    let missing = 0;
+    for (const s of list) {
+      if (s.id in profile.values) continue;
+      const v = defaultFor(s);
+      if (v === undefined) missing++; else profile.values[s.id] = v;
+    }
+    det.open = true; profileChanged(); renderBatch();
+    if (missing) status(`${g}: ${missing} setting(s) left off - no read device has them`);
+  });
+  $(".b-off", det).onclick = stop(() => {
+    list.forEach(s => delete profile.values[s.id]);
+    profileChanged(); renderBatch();
+  });
+  $(".b-apply", det).onclick = stop(() => {
+    if (!list.some(s => s.id in profile.values)) return alert(`Nothing is switched on in "${g}".`);
+    planGroups = [g];
+    showTab("apply");
+    $("#btnPlan").click();
   });
 }
+
+function applyBatchFilter() {
+  const q = $("#batchSearch").value.trim().toLowerCase();
+  const onlyActive = $("#onlyActive").checked;
+  $$("#batchGroups details.group").forEach(det => {
+    let visible = 0;
+    $$("tbody tr", det).forEach(tr => {
+      const show = (!q || tr.dataset.search.includes(q)) && (!onlyActive || !tr.classList.contains("off"));
+      tr.classList.toggle("hidden", !show);
+      if (show) visible++;
+    });
+    det.classList.toggle("hidden", visible === 0);
+    if (q && visible) det.open = true;
+  });
+}
+
+function renderBatchCounts() {
+  $$("#batchGroups details.group").forEach(det => {
+    const all = CATALOG.filter(s => s.batch && s.group === det.dataset.g);
+    const n = all.filter(s => s.id in profile.values).length;
+    $(".count", det).innerHTML = `<span class="chip ${n ? "ok" : ""}">${n}/${all.length} on</span>`;
+  });
+}
+
+function saveOpenState() {
+  try { localStorage.setItem("muon.open", JSON.stringify($$("#batchGroups details.group[open]").map(d => d.dataset.g))); } catch {}
+}
+
+$("#batchSearch").addEventListener("input", applyBatchFilter);
+$("#onlyActive").addEventListener("change", applyBatchFilter);
+$("#btnExpand").onclick = () => { $$("#batchGroups details.group").forEach(d => d.open = true); saveOpenState(); };
+$("#btnCollapse").onclick = () => { $$("#batchGroups details.group").forEach(d => d.open = false); saveOpenState(); };
 
 // ------------------------------------------------------------------ tab 2: per I/O
 function renderIo() {
@@ -423,7 +517,7 @@ function renderIo() {
         profile.io[scope] ??= {}; profile.io[scope][k] ??= {};
         if (nv === undefined) delete profile.io[scope][k][s.id]; else profile.io[scope][k][s.id] = nv;
         if (!Object.keys(profile.io[scope][k]).length) delete profile.io[scope][k];
-        persist(); renderIo();
+        profileChanged(); renderIo();
       }));
       tr.appendChild(td);
     }
@@ -546,12 +640,21 @@ function relevantOverrides() {
   const o = {}; for (const ip of selected) if (overrides[ip]) o[ip] = overrides[ip]; return o;
 }
 
+function renderGroupFilter() {
+  const box = $("#groupFilter");
+  box.classList.toggle("hidden", !planGroups);
+  if (!planGroups) return;
+  box.innerHTML = `Only category <strong>${esc(planGroups.join(", "))}</strong> is previewed and applied. <button id="btnAllGroups">Show all categories</button>`;
+  $("#btnAllGroups").onclick = () => { planGroups = null; lastPlan = null; renderGroupFilter(); $("#btnPlan").click(); };
+}
+
 $("#btnPlan").onclick = async () => {
+  renderGroupFilter();
   if (!selected.size) return alert("Select devices first.");
   const unread = [...selected].filter(ip => !reads[ip]);
   if (unread.length) return alert("Read these devices first: " + unread.join(", "));
   status("building preview…");
-  const r = await api("/api/plan", { ips: [...selected], profile, overrides: relevantOverrides() });
+  const r = await api("/api/plan", { ips: [...selected], profile, overrides: relevantOverrides(), groups: planGroups });
   lastPlan = r.plan; renderPlan(); status("preview ready");
 };
 $("#showUnchanged").onchange = () => lastPlan && renderPlan();
@@ -615,7 +718,7 @@ $("#applyGo").onclick = async () => {
   const ips = Object.keys(lastPlan).filter(ip => !lastPlan[ip].error);
   status(`applying to ${ips.length} device(s)…`); $("#btnApply").disabled = true;
   try {
-    const r = await api("/api/apply", { ips, profile, overrides: relevantOverrides(), confirm: "APPLY" });
+    const r = await api("/api/apply", { ips, profile, overrides: relevantOverrides(), groups: planGroups, confirm: "APPLY" });
     renderPlan(r.results);
     status("apply finished — see verification per field");
     await refreshDevices(); refreshBackups();
@@ -627,21 +730,51 @@ async function refreshProfiles() {
   const p = await api("/api/profiles");
   $("#profileSel").innerHTML = `<option value="">— profile —</option>` + p.profiles.map(n => `<option>${esc(n)}</option>`).join("");
 }
-$("#btnLoadProfile").onclick = async () => {
-  const name = $("#profileSel").value; if (!name) return;
+function setDirty(on) {
+  dirty = on;
+  $("#dirty").classList.toggle("hidden", !on);
+  try { localStorage.setItem("muon.dirty", JSON.stringify(on)); } catch {}
+}
+function profileChanged() { persist(); setDirty(true); }
+
+async function loadProfile(name) {
   const r = await api("/api/profiles/load", { name });
   profile = { values: r.profile.values || {}, io: r.profile.io || {} };
-  persist(); renderAll(); status("profile " + name + " loaded");
+  currentProfile = name; $("#profileSel").value = name;
+  try { localStorage.setItem("muon.profileName", JSON.stringify(name)); } catch {}
+  persist(); setDirty(false); renderAll(); status("profile " + name + " loaded");
+}
+async function saveProfile(name) {
+  await api("/api/profiles/save", { name, profile });
+  await refreshProfiles();
+  currentProfile = name; $("#profileSel").value = name;
+  try { localStorage.setItem("muon.profileName", JSON.stringify(name)); } catch {}
+  setDirty(false); status("saved " + name);
+}
+
+$("#profileSel").onchange = async () => {
+  const name = $("#profileSel").value;
+  if (!name) return;
+  if (dirty && !confirm(`Discard unsaved changes to "${currentProfile || "the profile"}" and load "${name}"?`)) {
+    $("#profileSel").value = currentProfile || ""; return;
+  }
+  await loadProfile(name);
+};
+$("#btnSave").onclick = () => {
+  const name = $("#profileSel").value;
+  if (!name) return $("#btnSaveProfile").click();
+  if (name.endsWith(".example")) return alert("The .example profile is the tracked template - use Save as… (e.g. site-default).");
+  saveProfile(name);
 };
 $("#btnSaveProfile").onclick = async () => {
-  const name = prompt("Profile name:", $("#profileSel").value || "site-default"); if (!name) return;
-  await api("/api/profiles/save", { name, profile }); await refreshProfiles(); $("#profileSel").value = name; status("saved " + name);
+  const name = prompt("Profile name:", ($("#profileSel").value || "site-default").replace(/\.example$/, "")); if (!name) return;
+  saveProfile(name);
 };
 $("#btnDelProfile").onclick = async () => {
   const name = $("#profileSel").value; if (!name || !confirm("Delete profile " + name + "?")) return;
-  await api("/api/profiles/delete", { name }); refreshProfiles();
+  await api("/api/profiles/delete", { name }); currentProfile = ""; refreshProfiles();
 };
-$("#btnClear").onclick = () => { if (confirm("Clear the batch profile (incl. per-I/O values)?")) { profile = { values: {}, io: {} }; persist(); renderAll(); } };
+$("#btnClear").onclick = () => { if (confirm("Clear the batch profile (incl. per-I/O values)?")) { profile = { values: {}, io: {} }; profileChanged(); renderAll(); } };
 $("#btnCapture").onclick = () => { if (!Object.keys(reads).length) return alert("Read a device first."); $("#captureDlg").showModal(); };
 $("#captureCancel").onclick = () => $("#captureDlg").close();
 $("#captureGo").onclick = async () => {
@@ -653,14 +786,19 @@ $("#captureGo").onclick = async () => {
   for (const [sc, ins] of Object.entries(r.profile.io)) for (const [k, v] of Object.entries(ins)) { const s = strip(v); if (Object.keys(s).length) (io[sc] ??= {})[k] = s; }
   if ($("#captureMerge").checked) { Object.assign(profile.values, vals); for (const [sc, ins] of Object.entries(io)) profile.io[sc] = { ...(profile.io[sc] || {}), ...ins }; }
   else profile = { values: vals, io };
-  $("#captureDlg").close(); persist(); renderAll(); status(`captured ${Object.keys(vals).length} value(s) from ${ip}`);
+  $("#captureDlg").close(); profileChanged(); renderAll(); status(`captured ${Object.keys(vals).length} value(s) from ${ip}`);
 };
 
 // ------------------------------------------------------------------ tabs / init
+function showTab(tab) {
+  $$("#tabs button").forEach(x => x.classList.toggle("active", x.dataset.tab === tab));
+  for (const t of ["batch", "io", "device", "apply"]) $("#tab-" + t).classList.toggle("hidden", t !== tab);
+  renderTab(tab);
+}
 $$("#tabs button").forEach(b => b.onclick = () => {
-  $$("#tabs button").forEach(x => x.classList.toggle("active", x === b));
-  for (const t of ["batch", "io", "device", "apply"]) $("#tab-" + t).classList.toggle("hidden", t !== b.dataset.tab);
-  renderTab(b.dataset.tab);
+  // the "4" tab itself always means: all categories
+  if (b.dataset.tab === "apply" && planGroups) { planGroups = null; lastPlan = null; renderGroupFilter(); }
+  showTab(b.dataset.tab);
 });
 function renderTab(t) { if (t === "batch") renderBatch(); if (t === "io") renderIo(); if (t === "device") renderDevice(); }
 function renderAll() { renderDevices(); renderDeviceSelects(); renderTab($("#tabs button.active").dataset.tab); }
@@ -674,6 +812,16 @@ function renderAll() { renderDevices(); renderDeviceSelects(); renderTab($("#tab
   overrides = load("muon.overrides", {});
   selected = new Set(load("muon.selected", []));
   await Promise.all([refreshDevices(), refreshProfiles(), refreshBackups()]);
+  // Reopen the last profile; on first use start with the editable site default.
+  const names = $$("#profileSel option").map(o => o.value);
+  const last = load("muon.profileName", "");
+  const hasDraft = Object.keys(profile.values || {}).length || Object.keys(profile.io || {}).length;
+  if (last && names.includes(last)) {
+    currentProfile = last; $("#profileSel").value = last;
+    if (!hasDraft) await loadProfile(last); else setDirty(load("muon.dirty", false));
+  } else if (!hasDraft && names.includes("site-default")) {
+    await loadProfile("site-default");
+  }
   renderAll();
 })().catch(e => status("init failed: " + e.message));
 </script>
