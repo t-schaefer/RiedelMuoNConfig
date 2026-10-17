@@ -24,6 +24,15 @@ To update later, double-click **`Update-MuoNConfig.bat`**. It runs
 profile and backups are not in git, so they are kept. To remove the service,
 run `config-tool\uninstall-task-windows.ps1` as administrator.
 
+To switch the installed service off and on without uninstalling it,
+double-click **`Stop-MuoNConfig-Service.bat`** or
+**`Start-MuoNConfig-Service.bat`** (both ask for administrator rights via
+UAC). Stop asks for a confirmation first, because it interrupts an apply that
+is still running. The task stays installed, so the tool also starts again at
+the next boot. Start refuses to run if something else already holds port
+8091, for example a `Start-MuoNConfig.bat` window. Both use
+`service-control.ps1`.
+
 ### Login
 
 The tool is password protected. The installer asks for a password if none is
